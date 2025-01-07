@@ -78,100 +78,210 @@ class CorrelationAnalyzer:
         return plt.gcf()
 
 
+from sklearn.model_selection import RandomizedSearchCV
+
+
+
 #Using LGBM regressor with other simpler models
 class MarketPredictor:
+    """
+    Class for market prediction using a LightGBM model.
+
+    Attributes:
+        feature_cols (list): List of feature column names.
+        target (str): Name of the target variable.
+        models (dict): Dictionary to store trained models.
+        scaler (StandardScaler): StandardScaler object for feature scaling.
+    """
+
+    #initialize default parameters
     def __init__(self):
         self.feature_cols = [f'feature_{i:02d}' for i in range(79)]
-        #Which responder should we choose? The say 9 is the latest one so that's proabably best but I need your intuition
-        self.target = 'responder_9'
+        self.target = 'responder_6' 
         self.models = {}
         self.scaler = StandardScaler()
-        
+
     def create_temporal_features(self, df, symbol_id):
-        """Create time-based features for a specific symbol"""
-        # Rolling statistics - this class and the next are from chat but it seems rlly good
+        """
+        Creates time-based features (rolling mean and standard deviation) 
+        for a specific symbol.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            symbol_id (str or int): Unique identifier for the symbol.
+
+        Returns:
+            pd.DataFrame: DataFrame with added temporal features.
+        """
         windows = [5, 10, 20]
-        
         for feat in self.feature_cols:
             symbol_data = df[df['symbol_id'] == symbol_id][feat]
-            
             for window in windows:
                 df.loc[df['symbol_id'] == symbol_id, f'{feat}_mean_{window}'] = symbol_data.rolling(window).mean()
                 df.loc[df['symbol_id'] == symbol_id, f'{feat}_std_{window}'] = symbol_data.rolling(window).std()
-                
         return df
-    
+
     def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
-        """Create lagged features for a specific symbol"""
+        """
+        Creates lagged features for a specific symbol.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            symbol_id (str or int): Unique identifier for the symbol.
+            lags (list): List of lag values.
+
+        Returns:
+            pd.DataFrame: DataFrame with added lagged features.
+        """
         for feat in self.feature_cols:
             symbol_data = df[df['symbol_id'] == symbol_id][feat]
-            
             for lag in lags:
                 df.loc[df['symbol_id'] == symbol_id, f'{feat}_lag_{lag}'] = symbol_data.shift(lag)
-                
         return df
 
     def prepare_features(self, df, lags_df=None):
-        """Prepare features for training/prediction"""
+        """
+        Prepares features for training or prediction.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame.
+            lags_df (pd.DataFrame, optional): DataFrame containing lagged responder values. 
+                                              Defaults to None.
+
+        Returns:
+            pd.DataFrame: DataFrame with engineered features.
+        """
         df = df.copy()
-        
-        # Add lags data if provided
+
         if lags_df is not None:
-            for resp in [f'responder_{i}' for i in range(9)]:
-                df[f'{resp}_prev'] = lags_df[resp]
-        
-        # Create features for each symbol
+            # Add lagged responder values as features
+            responders_before = [f'responder_{i}' for i in range(6)]
+            responders_after = [f'responder_{i}' for i in range(7, 9)]
+            for resp in responders_before + responders_after:
+                if resp in lags_df.columns:
+                    df[f'{resp}_prev'] = lags_df[resp]
+
+        # Create temporal and lag features for each symbol
         for symbol in df['symbol_id'].unique():
             df = self.create_temporal_features(df, symbol)
             df = self.create_lag_features(df, symbol)
-        
-        # Drop rows with NaN (usually at the start due to rolling/lag features)
+
+        # Drop rows with missing values (due to rolling/lag operations)
         df = df.dropna()
-        
         return df
-    
-    #need your expertise here
+
     def get_feature_columns(self, df):
-        """Get all feature columns including engineered ones"""
+        """
+        Gets all feature column names, including engineered features.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing the features.
+
+        Returns:
+            list: List of feature column names.
+        """
         return [col for col in df.columns 
-                if col.startswith('feature_') or 
-                   col.endswith(('_mean_5', '_mean_10', '_mean_20',
-                               '_std_5', '_std_10', '_std_20',
-                               '_lag_1', '_lag_2', '_lag_3')) or
-                   col.endswith('_prev')]
-    
+                   if col.startswith('feature_') or 
+                      col.endswith(('_mean_5', '_mean_10', '_mean_20', 
+                                   '_std_5', '_std_10', '_std_20', 
+                                   '_lag_1', '_lag_2', '_lag_3')) or 
+                      col.endswith('_prev')]
+
     def train(self, train_df, lags_df=None):
-        # Here we are initializing the models. No idea what numbers I should pick but from the internet these are common
-        lgb = LGBMRegressor(
-            n_estimators=1000,
-            learning_rate=0.01,
-            max_depth=8,
-            num_leaves=31,
-            subsample=0.8,
-            colsample_bytree=0.8,
+        """
+        Trains a LightGBM model using RandomizedSearchCV for hyperparameter tuning.
+
+        Args:
+            train_df (pd.DataFrame): DataFrame containing training data.
+            lags_df (pd.DataFrame, optional): DataFrame containing lagged responder values 
+                                              for training. Defaults to None.
+
+        Returns:
+            LGBMRegressor: Trained LightGBM model.
+        """
+        
+        #hyperparameter tuning
+        param_distributions = {
+            'n_estimators': randint(100, 3000),
+            'learning_rate': uniform(0.001, 0.1),
+            'max_depth': randint(3, 15),
+            'num_leaves': randint(20, 100),
+            'subsample': uniform(0.6, 0.4), 
+            'colsample_bytree': uniform(0.6, 0.4), 
+            'min_child_samples': randint(1, 50),
+            'reg_alpha': uniform(0, 2),
+            'reg_lambda': uniform(0, 2)
+        }
+
+        base_model = LGBMRegressor(random_state=42)
+
+        random_search = RandomizedSearchCV(
+            estimator=base_model,
+            param_distributions=param_distributions,
+            n_iter=50,
+            cv=5,
+            scoring='neg_mean_squared_error',
+            n_jobs=-1,
+            verbose=2,
             random_state=42
         )
-        
-        #use ridge
-        
+
+        if lags_df is not None:
+            X = lags_df
+        else:
+            X = train_df.drop(['your_target_column'], axis=1) 
+
+        y = train_df['your_target_column']
+
+        random_search.fit(X, y)
+
+        best_params = random_search.best_params_
+        best_model = random_search.best_estimator_
+
+        print("Best parameters found:")
+        for param, value in best_params.items():
+            print(f"{param}: {value}")
+        print(f"Best cross-validation score: {-random_search.best_score_:.4f} MSE")
+
+        return best_model
+
     def predict(self, test_df, lags_df=None):
-        """Make predictions on test data"""
-        # Prepare and scale the features. Then we make a prediction
+        """
+        Makes predictions on test data.
+
+        Args:
+            test_df (pd.DataFrame): DataFrame containing test data.
+            lags_df (pd.DataFrame, optional): DataFrame containing lagged responder values 
+                                              for test data. Defaults to None.
+
+        Returns:
+            np.ndarray: Array of predictions.
+        """
         df = self.prepare_features(test_df, lags_df)
         X = self.scaler.transform(df[self.feature_cols_final])
         predictions = self.models['ensemble'].predict(X)
         return predictions
-    
+
     def evaluate(self, y_true, y_pred, weights):
-        """Calculate weighted R-squared score"""
+        """
+        Calculates the weighted R-squared score.
+
+        Args:
+            y_true (np.ndarray): Array of true target values.
+            y_pred (np.ndarray): Array of predicted target values.
+            weights (np.ndarray): Array of weights for each prediction.
+
+        Returns:
+            float: Weighted R-squared score.
+        """
         weighted_mse = np.sum(weights * (y_true - y_pred) ** 2)
         weighted_var = np.sum(weights * y_true ** 2)
         r2 = 1 - weighted_mse / weighted_var
         return r2
-
+        
 def main():
-    # Example usage
-    # Load data
+    
+    # file path
     path = "/kaggle/input/jane-street-real-time-market-data-forecasting"
     samples = [] 
 
@@ -180,12 +290,58 @@ def main():
         file_path = f"{path}/train.parquet/partition_id={i}/part-0.parquet"
         part = pd.read_parquet(file_path)
         samples.append(part)
-        
+
+    #transform into single dataframe
     df = pd.concat(samples, ignore_index=True)
 
-    print(df)
-
+    #initialize Market Predictor
+    predictor = MarketPredictor()
+    
+    # Split data into train and test sets
+    train_size = int(len(df) * 0.8)
+    train_df = df[:train_size]
+    test_df = df[train_size:]
+    
+    # Create lags dataframe for training with appropriate responder columns
+    # Include all responders except 6 as features, plus responder_6 itself
+    responder_cols = ([f'responder_{i}' for i in range(6)] + 
+                     [f'responder_{i}' for i in range(7, 9)])
+    lags_df = train_df[responder_cols].shift(1)
+    lags_df = lags_df.dropna()
+    
+    # Prepare features for training
+    train_prepared = predictor.prepare_features(train_df, lags_df)
+    
+    # Get feature columns
+    feature_cols = predictor.get_feature_columns(train_prepared)
+    predictor.feature_cols_final = feature_cols
+    
+    # Scale the features
+    X_train = train_prepared[feature_cols]
+    predictor.scaler.fit_transform(X_train)
+    
+    # Train the model
+    best_model = predictor.train(train_prepared, lags_df)
+    predictor.models['ensemble'] = best_model
+    
+    # Prepare test data with same responder columns
+    test_lags_df = test_df[responder_cols].shift(1)
+    test_lags_df = test_lags_df.dropna()
+    
+    # Make predictions
+    predictions = predictor.predict(test_df, test_lags_df)
+    
+    # Calculate weights for evaluation (equal weights in this case)
+    weights = np.ones(len(predictions)) / len(predictions)
+    
+    # Model Evaluation with R^2
+    r2_score = predictor.evaluate(
+        test_df[predictor.target].iloc[1:],  # Shift by 1 to align with predictions
+        predictions,
+        weights
+    )
+    
+    print(f"Model R-squared score: {r2_score}")
+    
 if __name__ == "__main__": 
     main()
-
-
