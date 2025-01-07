@@ -103,5 +103,20 @@ class MarketPredictor:
 def main():
     # Example usage
     # Load data
-    #  We need to load the data and Initialize and train the model and make predictions
+    path = "/kaggle/input/jane-street-real-time-market-data-forecasting"
+    samples = [] 
+
+    # Load data
+    for i in range(1):
+        file_path = f"{path}/train.parquet/partition_id={i}/part-0.parquet"
+        part = pd.read_parquet(file_path)
+        samples.append(part)
+        
+    df = pd.concat(samples, ignore_index=True)
+
+    print(df)
+
+if __name__ == "__main__": 
+    main()
+
 
