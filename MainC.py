@@ -9,6 +9,75 @@ from sklearn.metrics import r2_score
 
 
 
+class CorrelationAnalyzer:
+    def __init__(self, correlation_threshold=0.8):
+        """
+        Initialize CorrelationAnalyzer
+        
+        Parameters:
+        correlation_threshold (float): Threshold for feature grouping
+        """
+        self.correlation_threshold = correlation_threshold
+        self.feature_groups = {}
+        self.selected_features = []
+        
+    def calculate_correlations(self, df, feature_cols):
+        """
+        Calculate Pearson correlation matrix for features
+        """
+        return df[feature_cols].corr()
+    
+    def find_feature_groups(self, df, feature_cols):
+        """
+        Find groups of highly correlated features using hierarchical clustering
+        """
+        corr = self.calculate_correlations(df, feature_cols)
+        
+        distance_matrix = 1 - np.abs(corr)
+   
+        linkage = hierarchy.linkage(distance_matrix, method='complete')
+        clusters = hierarchy.fcluster(linkage, self.correlation_threshold, criterion='distance')
+        
+        # Group features
+        self.feature_groups = {}
+        for feature, cluster_id in zip(feature_cols, clusters):
+            if cluster_id not in self.feature_groups:
+                self.feature_groups[cluster_id] = []
+            self.feature_groups[cluster_id].append(feature)
+            
+        return self.feature_groups
+    
+    def select_representative_features(self, df, target):
+        """
+        Select representative features from each group based on correlation with target
+        """
+        self.selected_features = []
+        
+        for group in self.feature_groups.values():
+            # Calculate correlation with target for each feature in group
+            correlations = []
+            for feature in group:
+                correlation = abs(df[feature].corr(df[target]))
+                correlations.append((feature, correlation))
+            
+            # Select feature with highest correlation with target
+            best_feature = max(correlations, key=lambda x: x[1])[0]
+            self.selected_features.append(best_feature)
+            
+        return self.selected_features
+    
+    def plot_correlation_matrix(self, df, feature_cols, figsize=(12, 8)):
+        """
+        Plot correlation matrix heatmap
+        """
+        plt.figure(figsize=figsize)
+        corr = self.calculate_correlations(df, feature_cols)
+        sns.heatmap(corr, cmap='coolwarm', center=0, annot=False)
+        plt.title('Feature Correlation Matrix')
+        plt.tight_layout()
+        return plt.gcf()
+
+
 #Using LGBM regressor with other simpler models
 class MarketPredictor:
     def __init__(self):
