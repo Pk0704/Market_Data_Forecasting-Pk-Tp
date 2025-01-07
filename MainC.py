@@ -72,14 +72,6 @@ class MarketPredictor:
                    col.endswith('_prev')]
     
     def train(self, train_df, lags_df=None):
-        """Train the models"""
-        # We are preparing and scaling the features
-        df = self.prepare_features(train_df, lags_df)
-        feature_cols = self.get_feature_columns(df)
-        
-        X = self.scaler.fit_transform(df[feature_cols])
-        y = df[self.target].values
-        
         # Here we are initializing the models. No idea what numbers I should pick but from the internet these are common
         lgb = LGBMRegressor(
             n_estimators=1000,
@@ -91,19 +83,7 @@ class MarketPredictor:
             random_state=42
         )
         
-        ridge = Ridge(alpha=1.0, random_state=42)
-        
-        # Train ensemble
-        ensemble = VotingRegressor([
-            ('lgb', lgb),
-            ('ridge', ridge)
-        ])
-        
-        ensemble.fit(X, y)
-        self.models['ensemble'] = ensemble
-        
-        # Store feature columns for prediction
-        self.feature_cols_final = feature_cols
+        #use ridge
         
     def predict(self, test_df, lags_df=None):
         """Make predictions on test data"""
