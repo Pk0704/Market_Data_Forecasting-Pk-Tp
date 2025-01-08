@@ -4,6 +4,8 @@ from scipy.cluster import hierarchy
 from scipy.stats import randint, uniform  # needed for RandomizedSearchCV
 import numpy as np
 from lightgbm import LGBMRegressor
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import VotingRegressor
 from sklearn.preprocessing import StandardScaler
