@@ -1,5 +1,7 @@
 import fireducks.pandas as pd #just use without fireducks but add it at the end when we submit
 import polars as pl
+from scipy.cluster import hierarchy
+from scipy.stats import randint, uniform  # needed for RandomizedSearchCV
 import numpy as np
 from lightgbm import LGBMRegressor
 from sklearn.linear_model import Ridge
@@ -199,6 +201,14 @@ class MarketPredictor:
         Returns:
             LGBMRegressor: Trained LightGBM model.
         """
+        df = self.prepare_features(train_df, lags_df)
+    
+        # Use correlation analyzer
+        correlation_analyzer = CorrelationAnalyzer()
+        feature_cols = self.get_feature_columns(df)
+        correlation_analyzer.find_feature_groups(df, feature_cols)
+        selected_features = correlation_analyzer.select_representative_features(df, self.target)
+        self.feature_cols_final = selected_features
         
         #hyperparameter tuning
         param_distributions = {
@@ -229,9 +239,9 @@ class MarketPredictor:
         if lags_df is not None:
             X = lags_df
         else:
-            X = train_df.drop(['your_target_column'], axis=1) 
+            X = train_df[self.feature_cols_final] 
 
-        y = train_df['your_target_column']
+        y = train_df[self.target]
 
         random_search.fit(X, y)
 
