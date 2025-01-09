@@ -1,14 +1,14 @@
-import fireducks.pandas as pd #just use without fireducks but add it at the end when we submit
+import pandas as pd #just use without fireducks but add it at the end when we submit
 import polars as pl
 from scipy.cluster import hierarchy
 from scipy.stats import randint, uniform  # needed for RandomizedSearchCV
 import numpy as np
 from lightgbm import LGBMRegressor
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import VotingRegressor
 from sklearn.preprocessing import StandardScaler
+import seaborn as sns
+import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score
 
 
@@ -106,73 +106,77 @@ class MarketPredictor:
         self.scaler = StandardScaler()
 
     def create_temporal_features(self, df, symbol_id):
-        """
-        Creates time-based features (rolling mean and standard deviation) 
-        for a specific symbol.
-
-        Args:
-            df (pd.DataFrame): Input DataFrame.
-            symbol_id (str or int): Unique identifier for the symbol.
-
-        Returns:
-            pd.DataFrame: DataFrame with added temporal features.
-        """
+        """Creates time-based features with careful handling of NaN values"""
         windows = [5, 10, 20]
+        temp_df = df.copy()
+        
         for feat in self.feature_cols:
-            symbol_data = df[df['symbol_id'] == symbol_id][feat]
+            symbol_data = temp_df[temp_df['symbol_id'] == symbol_id][feat]
             for window in windows:
-                df.loc[df['symbol_id'] == symbol_id, f'{feat}_mean_{window}'] = symbol_data.rolling(window).mean()
-                df.loc[df['symbol_id'] == symbol_id, f'{feat}_std_{window}'] = symbol_data.rolling(window).std()
-        return df
+                # Use min_periods parameter to allow partial windows
+                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_mean_{window}'] = (
+                    symbol_data.rolling(window, min_periods=1).mean()
+                )
+                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_std_{window}'] = (
+                    symbol_data.rolling(window, min_periods=1).std()
+                )
+        
+        return temp_df
 
     def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
-        """
-        Creates lagged features for a specific symbol.
-
-        Args:
-            df (pd.DataFrame): Input DataFrame.
-            symbol_id (str or int): Unique identifier for the symbol.
-            lags (list): List of lag values.
-
-        Returns:
-            pd.DataFrame: DataFrame with added lagged features.
-        """
+        """Creates lagged features with careful handling of NaN values"""
+        temp_df = df.copy()
+        
         for feat in self.feature_cols:
-            symbol_data = df[df['symbol_id'] == symbol_id][feat]
+            symbol_data = temp_df[temp_df['symbol_id'] == symbol_id][feat]
             for lag in lags:
-                df.loc[df['symbol_id'] == symbol_id, f'{feat}_lag_{lag}'] = symbol_data.shift(lag)
-        return df
+                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_lag_{lag}'] = (
+                    symbol_data.shift(lag)
+                )
+        
+        return temp_df
 
     def prepare_features(self, df, lags_df=None):
-        """
-        Prepares features for training or prediction.
-
-        Args:
-            df (pd.DataFrame): Input DataFrame.
-            lags_df (pd.DataFrame, optional): DataFrame containing lagged responder values. 
-                                              Defaults to None.
-
-        Returns:
-            pd.DataFrame: DataFrame with engineered features.
-        """
-        df = df.copy()
-
+        """Prepares features with NaN handling"""
+        print(f"Initial DataFrame shape: {df.shape}")
+        temp_df = df.copy()
+        
+        # Add lagged responder values if available
         if lags_df is not None:
-            # Add lagged responder values as features
+            print(f"Lags DataFrame shape: {lags_df.shape}")
             responders_before = [f'responder_{i}' for i in range(6)]
             responders_after = [f'responder_{i}' for i in range(7, 9)]
+            
             for resp in responders_before + responders_after:
                 if resp in lags_df.columns:
-                    df[f'{resp}_prev'] = lags_df[resp]
-
-        # Create temporal and lag features for each symbol
-        for symbol in df['symbol_id'].unique():
-            df = self.create_temporal_features(df, symbol)
-            df = self.create_lag_features(df, symbol)
-
-        # Drop rows with missing values (due to rolling/lag operations)
-        df = df.dropna()
-        return df
+                    temp_df[f'{resp}_prev'] = lags_df[resp]
+        
+        # Create features for each symbol
+        for symbol in temp_df['symbol_id'].unique():
+            temp_df = self.create_temporal_features(temp_df, symbol)
+            temp_df = self.create_lag_features(temp_df, symbol)
+        
+        print(f"Shape after feature engineering: {temp_df.shape}")
+        
+        # Handle missing values more carefully
+        feature_cols = self.get_feature_columns(temp_df)
+        
+        # Fill NaN values with appropriate methods
+        for col in feature_cols:
+            if col.endswith(('_mean_5', '_mean_10', '_mean_20')):
+                temp_df[col].fillna(method='ffill', inplace=True)
+                temp_df[col].fillna(method='bfill', inplace=True)
+            elif col.endswith(('_std_5', '_std_10', '_std_20')):
+                temp_df[col].fillna(0, inplace=True)
+            elif col.endswith(('_lag_1', '_lag_2', '_lag_3')):
+                temp_df[col].fillna(method='ffill', inplace=True)
+                temp_df[col].fillna(0, inplace=True)
+        
+        # Drop any remaining rows with NaN values
+        temp_df = temp_df.dropna(subset=[self.target])
+        print(f"Final shape after handling NaN: {temp_df.shape}")
+        
+        return temp_df
 
     def get_feature_columns(self, df):
         """
@@ -184,49 +188,45 @@ class MarketPredictor:
         Returns:
             list: List of feature column names.
         """
-        return [col for col in df.columns 
-                   if col.startswith('feature_') or 
-                      col.endswith(('_mean_5', '_mean_10', '_mean_20', 
-                                   '_std_5', '_std_10', '_std_20', 
-                                   '_lag_1', '_lag_2', '_lag_3')) or 
+        return [col for col in df.columns
+                   if col.startswith('feature_') or
+                      col.endswith(('_mean_5', '_mean_10', '_mean_20',
+                                   '_std_5', '_std_10', '_std_20',
+                                   '_lag_1', '_lag_2', '_lag_3')) or
                       col.endswith('_prev')]
 
     def train(self, train_df, lags_df=None):
-        """
-        Trains a LightGBM model using RandomizedSearchCV for hyperparameter tuning.
-
-        Args:
-            train_df (pd.DataFrame): DataFrame containing training data.
-            lags_df (pd.DataFrame, optional): DataFrame containing lagged responder values 
-                                              for training. Defaults to None.
-
-        Returns:
-            LGBMRegressor: Trained LightGBM model.
-        """
+        """Modified train method with better error handling"""
         df = self.prepare_features(train_df, lags_df)
-    
+        
+        if df.empty:
+            raise ValueError("DataFrame is empty after preparation!")
+        
         # Use correlation analyzer
         correlation_analyzer = CorrelationAnalyzer()
         feature_cols = self.get_feature_columns(df)
+        
+        if not feature_cols:
+            raise ValueError("No feature columns found!")
+            
         correlation_analyzer.find_feature_groups(df, feature_cols)
         selected_features = correlation_analyzer.select_representative_features(df, self.target)
         self.feature_cols_final = selected_features
-        
-        #hyperparameter tuning
+
         param_distributions = {
             'n_estimators': randint(100, 3000),
             'learning_rate': uniform(0.001, 0.1),
             'max_depth': randint(3, 15),
             'num_leaves': randint(20, 100),
-            'subsample': uniform(0.6, 0.4), 
-            'colsample_bytree': uniform(0.6, 0.4), 
+            'subsample': uniform(0.6, 0.4),
+            'colsample_bytree': uniform(0.6, 0.4),
             'min_child_samples': randint(1, 50),
             'reg_alpha': uniform(0, 2),
             'reg_lambda': uniform(0, 2)
         }
 
         base_model = LGBMRegressor(random_state=42)
-
+        
         random_search = RandomizedSearchCV(
             estimator=base_model,
             param_distributions=param_distributions,
@@ -238,24 +238,15 @@ class MarketPredictor:
             random_state=42
         )
 
-        if lags_df is not None:
-            X = lags_df
-        else:
-            X = train_df[self.feature_cols_final] 
+        X = df[self.feature_cols_final]
+        y = df[self.target]
 
-        y = train_df[self.target]
+        if X.empty or y.empty:
+            raise ValueError("Feature or target data is empty!")
 
         random_search.fit(X, y)
+        return random_search.best_estimator_
 
-        best_params = random_search.best_params_
-        best_model = random_search.best_estimator_
-
-        print("Best parameters found:")
-        for param, value in best_params.items():
-            print(f"{param}: {value}")
-        print(f"Best cross-validation score: {-random_search.best_score_:.4f} MSE")
-
-        return best_model
 
     def predict(self, test_df, lags_df=None):
         """
@@ -294,17 +285,22 @@ class MarketPredictor:
 def main():
     
     # file path
-    path = "/kaggle/input/jane-street-real-time-market-data-forecasting"
+    path = "/Users/peterk/Downloads/JS Folder/jane-street-real-time-market-data-forecasting"
     samples = [] 
 
     # Load data
     for i in range(1):
         file_path = f"{path}/train.parquet/partition_id={i}/part-0.parquet"
-        part = pd.read_parquet(file_path)
-        samples.append(part)
+        try:
+            part = pd.read_parquet(file_path)
+            print(f"Loaded partition {i} with shape: {part.shape}")  # Debug print
+            samples.append(part)
+        except Exception as e:
+            print(f"Error loading partition {i}: {str(e)}")
 
     #transform into single dataframe
     df = pd.concat(samples, ignore_index=True)
+    print(f"Combined DataFrame shape: {df.shape}")  # Debug print
 
     #initialize Market Predictor
     predictor = MarketPredictor()
@@ -319,17 +315,25 @@ def main():
     responder_cols = ([f'responder_{i}' for i in range(6)] + 
                      [f'responder_{i}' for i in range(7, 9)])
     lags_df = train_df[responder_cols].shift(1)
+    print(f"Lags DataFrame shape before dropna: {lags_df.shape}")  # Debug print
     lags_df = lags_df.dropna()
+    print(f"Lags DataFrame shape after dropna: {lags_df.shape}")
     
     # Prepare features for training
     train_prepared = predictor.prepare_features(train_df, lags_df)
+    if train_prepared.empty:
+        raise ValueError("No data left after feature preparation!")
+    
     
     # Get feature columns
     feature_cols = predictor.get_feature_columns(train_prepared)
+    print(f"Number of features: {len(feature_cols)}")  # Debug print
     predictor.feature_cols_final = feature_cols
     
     # Scale the features
     X_train = train_prepared[feature_cols]
+    if X_train.empty:
+        raise ValueError("No features to scale!")
     predictor.scaler.fit_transform(X_train)
     
     # Train the model
