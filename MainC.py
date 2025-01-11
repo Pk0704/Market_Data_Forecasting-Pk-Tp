@@ -182,41 +182,41 @@ class MarketPredictor:
         self.feature_cols_final = None
         
     def create_temporal_features(self, df, symbol_id):
-    """Creates time-based features with careful handling of NaN values"""
-    windows = [5, 10, 20]
-    temp_df = df.copy()
-    feature_dfs = []
-    
-    # Get the symbol data once
-    symbol_mask = temp_df['symbol_id'] == symbol_id
-    symbol_data = temp_df[symbol_mask]
-    
-    for feat in self.feature_cols:
-        feature_series = symbol_data[feat]
+        """Creates time-based features with careful handling of NaN values"""
+        windows = [5, 10, 20]
+        temp_df = df.copy()
+        feature_dfs = []
         
-        for window in windows:
-            # Calculate rolling statistics
-            mean_series = feature_series.rolling(window, min_periods=1).mean()
-            std_series = feature_series.rolling(window, min_periods=1).std()
-            
-            # Create a DataFrame with the new features
-            window_df = pd.DataFrame({
-                f'{feat}_mean_{window}': mean_series,
-                f'{feat}_std_{window}': std_series
-            }, index=symbol_data.index)
-            
-            feature_dfs.append(window_df)
+        # Get the symbol data once
+        symbol_mask = temp_df['symbol_id'] == symbol_id
+        symbol_data = temp_df[symbol_mask]
     
-    # Combine all new features
-    if feature_dfs:
-        all_features = pd.concat(feature_dfs, axis=1)
+        for feat in self.feature_cols:
+            feature_series = symbol_data[feat]
+            
+            for window in windows:
+                # Calculate rolling statistics
+                mean_series = feature_series.rolling(window, min_periods=1).mean()
+                std_series = feature_series.rolling(window, min_periods=1).std()
+                
+                # Create a DataFrame with the new features
+                window_df = pd.DataFrame({
+                    f'{feat}_mean_{window}': mean_series,
+                    f'{feat}_std_{window}': std_series
+                }, index=symbol_data.index)
+                
+                feature_dfs.append(window_df)
         
-        # Update only the rows for the specified symbol_id
-        temp_df.loc[symbol_mask, all_features.columns] = all_features
-    
-    return temp_df
+        # Combine all new features
+        if feature_dfs:
+            all_features = pd.concat(feature_dfs, axis=1)
+            
+            # Update only the rows for the specified symbol_id
+            temp_df.loc[symbol_mask, all_features.columns] = all_features
+        
+        return temp_df
 
-        def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
+    def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
         """Creates lagged features with careful handling of NaN values"""
         temp_df = df.copy()
         feature_dfs = []
