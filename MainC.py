@@ -141,7 +141,12 @@ class CorrelationAnalyzer:
         print("Starting to plot correlation matrix")
         plt.figure(figsize=figsize)
         corr = self.calculate_correlations(df, feature_cols)
-        sns.heatmap(corr, cmap='coolwarm', center=0, annot=False)
+    
+        # Define a custom diverging colormap with light blue at 0
+        cmap = sns.diverging_palette(240, 10, as_cmap=True) 
+    
+        sns.heatmap(corr, square=True, cmap=cmap, alpha=0.9, vmin=-1, vmax=1, center=0, linewidths=0.5, linecolor='white')
+        plt.colorbar()  # Add colorbar
         plt.title('Feature Correlation Matrix')
         plt.tight_layout()
         plt.show()
