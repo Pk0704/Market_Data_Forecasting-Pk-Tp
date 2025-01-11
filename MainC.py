@@ -182,36 +182,68 @@ class MarketPredictor:
         self.feature_cols_final = None
         
     def create_temporal_features(self, df, symbol_id):
-        """Creates time-based features with careful handling of NaN values"""
-        windows = [5, 10, 20]
-        temp_df = df.copy()
+    """Creates time-based features with careful handling of NaN values"""
+    windows = [5, 10, 20]
+    temp_df = df.copy()
+    feature_dfs = []
+    
+    # Get the symbol data once
+    symbol_mask = temp_df['symbol_id'] == symbol_id
+    symbol_data = temp_df[symbol_mask]
+    
+    for feat in self.feature_cols:
+        feature_series = symbol_data[feat]
         
-        for feat in self.feature_cols:
-            symbol_data = temp_df[temp_df['symbol_id'] == symbol_id][feat]
-            for window in windows:
-                # Use min_periods parameter to allow partial windows
-                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_mean_{window}'] = (
-                    symbol_data.rolling(window, min_periods=1).mean()
-                )
-                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_std_{window}'] = (
-                    symbol_data.rolling(window, min_periods=1).std()
-                )
+        for window in windows:
+            # Calculate rolling statistics
+            mean_series = feature_series.rolling(window, min_periods=1).mean()
+            std_series = feature_series.rolling(window, min_periods=1).std()
+            
+            # Create a DataFrame with the new features
+            window_df = pd.DataFrame({
+                f'{feat}_mean_{window}': mean_series,
+                f'{feat}_std_{window}': std_series
+            }, index=symbol_data.index)
+            
+            feature_dfs.append(window_df)
+    
+    # Combine all new features
+    if feature_dfs:
+        all_features = pd.concat(feature_dfs, axis=1)
         
-        return temp_df
+        # Update only the rows for the specified symbol_id
+        temp_df.loc[symbol_mask, all_features.columns] = all_features
+    
+    return temp_df
 
-    def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
+        def create_lag_features(self, df, symbol_id, lags=[1, 2, 3]):
         """Creates lagged features with careful handling of NaN values"""
         temp_df = df.copy()
+        feature_dfs = []
+        
+        # Get the symbol data once
+        symbol_mask = temp_df['symbol_id'] == symbol_id
+        symbol_data = temp_df[symbol_mask]
         
         for feat in self.feature_cols:
-            symbol_data = temp_df[temp_df['symbol_id'] == symbol_id][feat]
+            feature_series = symbol_data[feat]
+            lag_dict = {}
+            
             for lag in lags:
-                temp_df.loc[temp_df['symbol_id'] == symbol_id, f'{feat}_lag_{lag}'] = (
-                    symbol_data.shift(lag)
-                )
+                lag_dict[f'{feat}_lag_{lag}'] = feature_series.shift(lag)
+            
+            # Create a DataFrame with all lags for this feature
+            lag_df = pd.DataFrame(lag_dict, index=symbol_data.index)
+            feature_dfs.append(lag_df)
+        
+        # Combine all new features
+        if feature_dfs:
+            all_features = pd.concat(feature_dfs, axis=1)
+            
+            # Update only the rows for the specified symbol_id
+            temp_df.loc[symbol_mask, all_features.columns] = all_features
         
         return temp_df
-
     def prepare_features(self, df, lags_df=None):
         """Prepares features with improved NaN handling"""
         print(f"Initial DataFrame shape: {df.shape}")
@@ -392,7 +424,7 @@ class MarketPredictor:
 def main():
     try:
         # File path
-        path = "/Users/peterk/Downloads/JS Folder/jane-street-real-time-market-data-forecasting"
+        path = "/kaggle/input/jane-street-real-time-market-data-forecasting"
         samples = []
 
         # Load data
@@ -426,11 +458,31 @@ def main():
                          [f'responder_{i}' for i in range(7, 9)])
         lags_df = train_df[responder_cols].shift(1)
         
+        # Set up the plotting environment
+        plt.style.use('seaborn')
+        plt.rcParams['figure.figsize'] = [12, 8]
+        
+        # Create a figure with subplots for data distribution
+        plt.figure(figsize=(15, 5))
+        plt.subplot(1, 2, 1)
+        sns.histplot(train_df[predictor.target], bins=50)
+        plt.title('Target Distribution - Training Data')
+        plt.xlabel(predictor.target)
+        
+        plt.subplot(1, 2, 2)
+        sns.histplot(test_df[predictor.target], bins=50)
+        plt.title('Target Distribution - Test Data')
+        plt.xlabel(predictor.target)
+        plt.tight_layout()
+        plt.show()
+        
         # Train the model
+        print("\nTraining model...")
         best_model = predictor.train(train_df, lags_df)
         predictor.models['ensemble'] = best_model
         
         # Prepare test data and make predictions
+        print("\nMaking predictions...")
         test_lags_df = test_df[responder_cols].shift(1)
         test_prepared = predictor.prepare_features(test_df, test_lags_df)
         predictions = predictor.predict(test_df, test_lags_df)
@@ -453,14 +505,46 @@ def main():
                 predictions,
                 weights
             )
-            print(f"Model R-squared score: {r2_score}")
+            print(f"\nModel R-squared score: {r2_score}")
             print(f"Number of samples used in evaluation: {min_len}")
+            
+            # Plot predictions vs actual
+            print("\nPlotting predictions vs actual values...")
+            predictor.plot_predictions_vs_actual(actuals, predictions)
+            
+            # Plot prediction error distribution
+            plt.figure(figsize=(12, 6))
+            errors = predictions - actuals
+            sns.histplot(errors, bins=50)
+            plt.title('Prediction Error Distribution')
+            plt.xlabel('Prediction Error')
+            plt.show()
+            
+            # Plot rolling mean of absolute errors
+            plt.figure(figsize=(12, 6))
+            abs_errors = np.abs(errors)
+            rolling_mae = pd.Series(abs_errors).rolling(window=100).mean()
+            plt.plot(rolling_mae)
+            plt.title('Rolling Mean Absolute Error (window=100)')
+            plt.xlabel('Sample')
+            plt.ylabel('Mean Absolute Error')
+            plt.show()
+            
+            # Create a residual plot
+            plt.figure(figsize=(12, 6))
+            plt.scatter(predictions, errors, alpha=0.5)
+            plt.axhline(y=0, color='r', linestyle='--')
+            plt.title('Residual Plot')
+            plt.xlabel('Predicted Values')
+            plt.ylabel('Residuals')
+            plt.show()
+            
         else:
             print("Failed to generate predictions")
 
     except Exception as e:
         print(f"Error in main: {str(e)}")
         raise  # Re-raise the exception to see the full traceback
-
+        
 if __name__ == "__main__":
     main()
