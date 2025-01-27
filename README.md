@@ -2,4 +2,4 @@
 
 Jane Street Trading Project from Kaggle. 
 
-By Thomas Pequegnot and Peter Kaloev
+By Peter Kaloev and Thomas Pequegnot.
