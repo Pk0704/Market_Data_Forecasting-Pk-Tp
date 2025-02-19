@@ -1,5 +1,5 @@
 # JS-Pk-Tp
 
-Jane Street Trading Project from Kaggle. 
+Jane Street Trading Competition Project. 
 
 By Peter Kaloev and Thomas Pequegnot.
